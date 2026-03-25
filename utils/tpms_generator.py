@@ -6,19 +6,50 @@ A lightweight utility to generate voxel grids of Triply Periodic Minimal Surface
 import numpy as np
 
 
-def _gyroid_equation(x, y, z):
-    """Gyroid implicit equation (2*pi is embedded, cell domain is [0, 1])"""
-    return (np.sin(2 * np.pi * x) * np.cos(2 * np.pi * y) + np.sin(2 * np.pi * z) * np.cos(2 * np.pi * x) + np.sin(2 * np.pi * y) * np.cos(2 * np.pi * z))
-
-
 def _primitive_equation(x, y, z):
-    """Primitive implicit equation (2*pi is embedded, cell domain is [0, 1])"""
+    """Primitive (P) / Sheet P"""
     return np.cos(2 * np.pi * x) + np.cos(2 * np.pi * y) + np.cos(2 * np.pi * z)
 
 
 def _diamond_equation(x, y, z):
-    """Diamond implicit equation (2*pi is embedded, cell domain is [0, 1])"""
-    return (np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y) * np.sin(2 * np.pi * z) + np.sin(2 * np.pi * x) * np.cos(2 * np.pi * y) * np.cos(2 * np.pi * z) + np.cos(2 * np.pi * x) * np.sin(2 * np.pi * y) * np.cos(2 * np.pi * z) + np.cos(2 * np.pi * x) * np.cos(2 * np.pi * y) * np.sin(2 * np.pi * z))
+    """Diamond (D) / Sheet D"""
+    return (np.cos(2 * np.pi * x) * np.cos(2 * np.pi * y) * np.cos(2 * np.pi * z) - np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y) * np.sin(2 * np.pi * z))
+
+
+def _gyroid_equation(x, y, z):
+    """Gyroid (G) / Sheet G"""
+    return (np.sin(2 * np.pi * x) * np.cos(2 * np.pi * y) + np.sin(2 * np.pi * z) * np.cos(2 * np.pi * x) + np.sin(2 * np.pi * y) * np.cos(2 * np.pi * z))
+
+
+def _iwp_equation(x, y, z):
+    """I-WP (W) / Sheet I-WP"""
+    return (2 * (np.cos(2 * np.pi * x) * np.cos(2 * np.pi * y) + np.cos(2 * np.pi * y) * np.cos(2 * np.pi * z) + np.cos(2 * np.pi * z) * np.cos(2 * np.pi * x)) - (np.cos(4 * np.pi * x) + np.cos(4 * np.pi * y) + np.cos(4 * np.pi * z)))
+
+
+def _frd_equation(x, y, z):
+    """F-RD / Sheet F-RD"""
+    return (4 * np.cos(2 * np.pi * x) * np.cos(2 * np.pi * y) * np.cos(2 * np.pi * z) - (np.cos(4 * np.pi * x) * np.cos(4 * np.pi * y) + np.cos(4 * np.pi * y) * np.cos(4 * np.pi * z) + np.cos(4 * np.pi * z) * np.cos(4 * np.pi * x)))
+
+
+def _l_equation(x, y, z):
+    """L / Sheet L"""
+    # 注意：已修复原代码中 np.sin(z) 为 np.sin(2 * np.pi * z) 确保周期匹配
+    return (0.5 * (np.sin(4 * np.pi * x) * np.cos(2 * np.pi * y) * np.sin(2 * np.pi * z) + np.sin(4 * np.pi * y) * np.cos(2 * np.pi * z) * np.sin(2 * np.pi * x) + np.sin(4 * np.pi * z) * np.cos(2 * np.pi * x) * np.sin(2 * np.pi * y)) - 0.5 * (np.cos(4 * np.pi * x) * np.cos(4 * np.pi * y) + np.cos(4 * np.pi * y) * np.cos(4 * np.pi * z) + np.cos(4 * np.pi * z) * np.cos(4 * np.pi * x)) + 0.15)
+
+
+def _tubular_p_equation(x, y, z):
+    """Tubular P / Sheet Tubular P"""
+    return (10 * (np.cos(2 * np.pi * x) + np.cos(2 * np.pi * y) + np.cos(2 * np.pi * z)) - 5.1 * (np.cos(2 * np.pi * x) * np.cos(2 * np.pi * y) + np.cos(2 * np.pi * y) * np.cos(2 * np.pi * z) + np.cos(2 * np.pi * z) * np.cos(2 * np.pi * x)) - 14.6)
+
+
+def _tubular_g_equation(x, y, z):
+    """Tubular G / Sheet Tubular G"""
+    return (10 * (np.cos(2 * np.pi * x) * np.sin(2 * np.pi * y) + np.cos(2 * np.pi * y) * np.sin(2 * np.pi * z) + np.cos(2 * np.pi * z) * np.sin(2 * np.pi * x)) - 0.5 * (np.cos(4 * np.pi * x) * np.cos(4 * np.pi * y) + np.cos(4 * np.pi * y) * np.cos(4 * np.pi * z) + np.cos(4 * np.pi * z) * np.cos(4 * np.pi * x)) - 14)
+
+
+def _i2_y_equation(x, y, z):
+    """I2-Y / Sheet I2-Y"""
+    return (-2 * (np.sin(4 * np.pi * x) * np.cos(2 * np.pi * y) * np.sin(2 * np.pi * z) + np.sin(2 * np.pi * x) * np.sin(4 * np.pi * y) * np.cos(2 * np.pi * z) + np.cos(2 * np.pi * x) * np.sin(2 * np.pi * y) * np.sin(4 * np.pi * z)) + np.cos(4 * np.pi * x) * np.cos(4 * np.pi * y) + np.cos(4 * np.pi * y) * np.cos(4 * np.pi * z) + np.cos(4 * np.pi * x) * np.cos(4 * np.pi * z))
 
 
 def generate_tpms_voxel_grid(tpms_type='Gyroid', Nx=1, Ny=1, Nz=1, resolution=60, relative_density=0.3, is_sheet=True):
@@ -45,7 +76,18 @@ def generate_tpms_voxel_grid(tpms_type='Gyroid', Nx=1, Ny=1, Nz=1, resolution=60
         A 3D array of shape (Nz*res, Ny*res, Nx*res) containing 0s (void) and 1s (solid).
     """
 
-    equations = {'Gyroid': _gyroid_equation, 'Primitive': _primitive_equation, 'Diamond': _diamond_equation}
+    equations = {
+        'Primitive': _primitive_equation,
+        'Diamond': _diamond_equation,
+        'Gyroid': _gyroid_equation,
+        'I-WP': _iwp_equation,
+        'F-RD': _frd_equation,
+        'L': _l_equation,
+        'Tubular P': _tubular_p_equation,
+        'Tubular G': _tubular_g_equation,
+        'I2-Y': _i2_y_equation
+    }
+
     if tpms_type not in equations:
         raise ValueError(f"TPMS type '{tpms_type}' not supported.")
     func = equations[tpms_type]
