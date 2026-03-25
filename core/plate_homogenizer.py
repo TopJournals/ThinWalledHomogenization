@@ -55,7 +55,7 @@ def build_tensor_dof_mapping(voxel, dx, dy, dz, thickness):
     active_mask = voxel > 0
     edofMat = edof_tensor[active_mask]
 
-    z_coords = np.linspace(dz/2, thickness - dz/2, nz)
+    z_coords = np.linspace(dz/2, thickness - dz/2, nz) - thickness / 2.0
     z_grid = np.broadcast_to(z_coords[:, None, None], (nz, ny, nx))
     z_active = z_grid[active_mask]
     return edofMat, z_active, node_indices.size * 3
@@ -92,11 +92,16 @@ def homogenization_plate(voxel, E=2000.0, nu=0.3, thickness=10.0, Nx=1, Ny=1, Nz
 
     # CuPy GPU Solver
     K_active_gpu = cpsp.csr_matrix(K[active_dofs, :][:, active_dofs])
+    F_active_gpu = cp.asarray(F[active_dofs, :])
+    U_active_gpu = cp.zeros((len(active_dofs), 6))
+    streams = [cp.cuda.Stream(non_blocking=True) for _ in range(6)]
     for c in range(6):
-        F_active_gpu = cp.asarray(F[active_dofs, c])
-        U_gpu, _ = cpspla.cg(K_active_gpu, F_active_gpu, tol=1e-6)
-        U[active_dofs, c] = U_gpu.get()
-
+        with streams[c]:
+            U_col_gpu, _ = cpspla.cg(K_active_gpu, F_active_gpu[:, c])
+            U_active_gpu[:, c] = U_col_gpu
+    for stream in streams:
+        stream.synchronize()
+    U[active_dofs, :] = U_active_gpu.get()
     ABD = np.zeros((6, 6))
     for i_gp in range(8):
         Sigma = np.einsum('ij,kjl->kil', C, E_macro - np.einsum('ij,kjl->kil', Bs[i_gp], U[edofMat, :]))

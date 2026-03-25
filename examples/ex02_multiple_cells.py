@@ -23,7 +23,7 @@ def run_simulation_ex02():
     nu_base = 0.35  # 基体材料泊松比
 
     # 晶胞阵列数设置
-    Nx, Ny, Nz = 1, 1, 6
+    Nx, Ny, Nz = 1, 1, 1.25
 
     # 假设单胞尺寸为 10mm x 10mm x 10mm
     # 当 Nz=2 时，宏观薄板的真实物理总厚度必须是 20.0 mm

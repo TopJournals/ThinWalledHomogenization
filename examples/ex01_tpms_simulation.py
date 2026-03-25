@@ -10,13 +10,13 @@ def run_simulation():
     nu_base = 0.35
     thickness = 10.0      # 10mm
     Nx, Ny, Nz = 1, 1, 1  # 确保是 10x10x10 的立方体单元截断
-    res = 64              # 网格分辨率 (可根据显存适当提高)
+    res = 128              # 网格分辨率 (可根据显存适当提高)
     density = 0.15        # 相对密度
-
-    print(f"Generating Sheet Gyroid ({Nx}x{Ny}x{Nz}) at res={res}...")
+    tpms_type = 'I-WP'
+    print(f"Generating Sheet {tpms_type} ({Nx}x{Ny}x{Nz}) at res={res}...")
     t0 = time.time()
     voxel_grid = generate_tpms_voxel_grid(
-        tpms_type='Gyroid', Nx=Nx, Ny=Ny, Nz=Nz,
+        tpms_type=tpms_type, Nx=Nx, Ny=Ny, Nz=Nz,
         resolution=res, relative_density=density, is_sheet=True
     )
 
