@@ -10,9 +10,9 @@ def run_simulation():
     nu_base = 0.35
     thickness = 10.0      # 10mm
     Nx, Ny, Nz = 1, 1, 1  # 确保是 10x10x10 的立方体单元截断
-    res = 128              # 网格分辨率 (可根据显存适当提高)
+    res = 64              # 网格分辨率 (可根据显存适当提高)
     density = 0.15        # 相对密度
-    tpms_type = 'I-WP'
+    tpms_type = 'Diamond'
     print(f"Generating Sheet {tpms_type} ({Nx}x{Ny}x{Nz}) at res={res}...")
     t0 = time.time()
     voxel_grid = generate_tpms_voxel_grid(
