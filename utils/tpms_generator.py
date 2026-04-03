@@ -154,7 +154,7 @@ def generate_tpms_voxel_grid(tpms_type='Gyroid', Nx=1, Ny=1, Nz=1, resolution=60
 if __name__ == "__main__":
     print("Generating Sheet Gyroid Voxel Grid with strict XYZ Indexing...")
 
-    grid = generate_tpms_voxel_grid(tpms_type='Gyroid', Nx=1, Ny=1, Nz=2, resolution=64, relative_density=0.15, is_sheet=True)
+    grid = generate_tpms_voxel_grid(tpms_type='Gyroid', Nx=1, Ny=1, Nz=1, resolution=64, relative_density=0.15, is_sheet=True)
 
     print(f"Grid shape (Nx, Ny, Nz): {grid.shape}")
     print(f"Actual volume fraction: {grid.mean():.4f}")

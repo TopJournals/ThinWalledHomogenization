@@ -35,12 +35,8 @@ def build_tensor_dof_mapping(voxel, dx, dy, dz, thickness):
     node_indices = np.arange((nx + 1) * (ny + 1) * (nz + 1)).reshape(nx + 1, ny + 1, nz + 1)
     dof_tensor = np.zeros((nx + 1, ny + 1, nz + 1, 3), dtype=int)
     dof_tensor[..., 0], dof_tensor[..., 1], dof_tensor[..., 2] = node_indices * 3, node_indices * 3 + 1, node_indices * 3 + 2
-
-    # Apply 2D-PBC on X and Y boundaries (Z remains 1D-FBC)
     dof_tensor[nx, :, :, :] = dof_tensor[0, :, :, :]
     dof_tensor[:, ny, :, :] = dof_tensor[:, 0, :, :]
-
-    # Extract 8 local corners based on pure [x, y, z] topological shifting
     n1, n2 = dof_tensor[:-1, :-1, :-1, :], dof_tensor[1:, :-1, :-1, :]
     n3, n4 = dof_tensor[1:, 1:, :-1, :], dof_tensor[:-1, 1:, :-1, :]
     n5, n6 = dof_tensor[:-1, :-1, 1:, :], dof_tensor[1:, :-1, 1:, :]
@@ -49,7 +45,6 @@ def build_tensor_dof_mapping(voxel, dx, dy, dz, thickness):
 
     active_mask = voxel > 0  # Filter out void regions
     edofMat = edof_tensor[active_mask]
-
     z_coords = np.linspace(dz / 2, thickness - dz / 2, nz) - thickness / 2.0
     z_grid = np.broadcast_to(z_coords[None, None, :], (nx, ny, nz))  # Z is the 3rd axis
     z_active = z_grid[active_mask]
@@ -79,10 +74,11 @@ def homogenization_plate(voxel, E=2000.0, nu=0.3, thickness=10.0, Nx=1, Ny=1, Nz
     K_active_gpu = cpsp.csr_matrix(K[active_dofs, :][:, active_dofs])
     F_active_gpu = cp.asarray(F[active_dofs, :])
     U_active_gpu = cp.zeros((len(active_dofs), 6))
+    M_gpu = cpsp.diags(1.0 / K_active_gpu.diagonal())
     streams = [cp.cuda.Stream(non_blocking=True) for _ in range(6)]  # Initialize concurrent CUDA streams
     for c in range(6):
         with streams[c]:  # Launch asynchronous GPU solving for 6 load cases
-            U_col_gpu, _ = cpspla.cg(K_active_gpu, F_active_gpu[:, c])  # Conjugate gradient solver on GPU
+            U_col_gpu, _ = cpspla.cg(K_active_gpu, F_active_gpu[:, c], M=M_gpu, tol=1e-6, maxiter=5000)  # Jacobi Preconditioner Conjugate gradient solver on GPU
             U_active_gpu[:, c] = U_col_gpu
     for stream in streams:
         stream.synchronize()  # Barrier synchronization
