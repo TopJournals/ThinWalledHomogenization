@@ -51,7 +51,7 @@ def build_tensor_dof_mapping(voxel, dx, dy, dz, thickness):
     return edofMat, z_active, node_indices.size * 3
 
 def homogenization_plate(voxel, E=2000.0, nu=0.3, thickness=10.0, Nx=1, Ny=1, Nz=1):
-    nz, ny, nx = voxel.shape
+    nx, ny, nz = voxel.shape
     cell_size = thickness / Nz
     Lx = Nx * cell_size
     Ly = Ny * cell_size

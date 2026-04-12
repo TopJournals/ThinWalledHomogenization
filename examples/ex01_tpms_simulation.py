@@ -17,8 +17,8 @@ def run_simulation():
     # Nx=Ny=Nz=1 represents a single truncated unit cell cube.
     Nx, Ny, Nz = 1, 1, 1
 
-    res = 96  # Voxel resolution per unit cell (increase for higher accuracy)
-    density = 0.15  # Target relative density (volume fraction)
+    res = 2  # Voxel resolution per unit cell (increase for higher accuracy)
+    density = 1  # Target relative density (volume fraction)
     tpms_type = 'Primitive'  # TPMS topology type
 
     # =====================================================================
@@ -34,6 +34,13 @@ def run_simulation():
         relative_density=density,
         is_sheet=True
     )
+
+    # voxel_grid = np.pad(
+    #     voxel_grid,
+    #     pad_width=((0, 0), (0, 0), (2, 2)),
+    #     mode='constant',
+    #     constant_values=1
+    # )
 
     # =====================================================================
     # 3. Execute GPU-Accelerated 2D Plate Homogenization
