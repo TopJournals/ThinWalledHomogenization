@@ -37,6 +37,7 @@ def build_tensor_dof_mapping(voxel, dx, dy, dz, thickness):
     dof_tensor[..., 0], dof_tensor[..., 1], dof_tensor[..., 2] = node_indices * 3, node_indices * 3 + 1, node_indices * 3 + 2
     dof_tensor[nx, :, :, :] = dof_tensor[0, :, :, :]
     dof_tensor[:, ny, :, :] = dof_tensor[:, 0, :, :]
+
     n1, n2 = dof_tensor[:-1, :-1, :-1, :], dof_tensor[1:, :-1, :-1, :]
     n3, n4 = dof_tensor[1:, 1:, :-1, :], dof_tensor[:-1, 1:, :-1, :]
     n5, n6 = dof_tensor[:-1, :-1, 1:, :], dof_tensor[1:, :-1, 1:, :]
@@ -45,6 +46,7 @@ def build_tensor_dof_mapping(voxel, dx, dy, dz, thickness):
 
     active_mask = voxel > 0  # Filter out void regions
     edofMat = edof_tensor[active_mask]
+
     z_coords = np.linspace(dz / 2, thickness - dz / 2, nz) - thickness / 2.0
     z_grid = np.broadcast_to(z_coords[None, None, :], (nx, ny, nz))  # Z is the 3rd axis
     z_active = z_grid[active_mask]
@@ -58,18 +60,23 @@ def homogenization_plate(voxel, E=2000.0, nu=0.3, thickness=10.0, Nx=1, Ny=1, Nz
     Lz = thickness
     dx, dy, dz = Lx / nx, Ly / ny, Lz / nz
     plate_area = Lx * Ly  # Critical normalization factor for 2D-PH
+
     C = get_isotropic_elasticity(E, nu)
     Ke, Bs, detJ = compute_element_stiffness(C, dx, dy, dz)
     edofMat, z_active, total_dofs = build_tensor_dof_mapping(voxel, dx, dy, dz, thickness)
+
     iK, jK = np.repeat(edofMat, 24, axis=1).flatten(), np.tile(edofMat, (1, 24)).flatten()
     sK = np.tile(Ke.flatten(), edofMat.shape[0])
     K = coo_matrix((sK, (iK, jK)), shape=(total_dofs, total_dofs)).tocsr()  # Loop-free assembly of global stiffness
+
     E_macro = np.zeros((len(z_active), 6, 6))
     E_macro[:, 0, 0], E_macro[:, 1, 1], E_macro[:, 5, 2] = 1.0, 1.0, 1.0  # Apply unit membrane strains
     E_macro[:, 0, 3], E_macro[:, 1, 4], E_macro[:, 5, 5] = z_active, z_active, z_active  # Apply unit bending curvatures
+
     F_ele = sum([np.einsum('ji,kjl->kil', Bs[i], np.einsum('ij,kjl->kil', C, E_macro)) * detJ for i in range(8)])  # Local load via tensor contraction
     F = np.column_stack([np.bincount(edofMat.flatten(), weights=F_ele[:, :, c].flatten(), minlength=total_dofs) for c in range(6)])  # Global load assembly
     active_dofs = np.setdiff1d(np.unique(edofMat), np.unique(edofMat)[:3])  # Eliminate rigid body motions
+
     U = np.zeros((total_dofs, 6))
     K_active_gpu = cpsp.csr_matrix(K[active_dofs, :][:, active_dofs])
     F_active_gpu = cp.asarray(F[active_dofs, :])
@@ -83,6 +90,7 @@ def homogenization_plate(voxel, E=2000.0, nu=0.3, thickness=10.0, Nx=1, Ny=1, Nz
     for stream in streams:
         stream.synchronize()  # Barrier synchronization
     U[active_dofs, :] = U_active_gpu.get()
+
     ABD = np.zeros((6, 6))
     for i_gp in range(8):
         Sigma = np.einsum('ij,kjl->kil', C, E_macro - np.einsum('ij,kjl->kil', Bs[i_gp], U[edofMat, :]))  # Recover true physical stress
