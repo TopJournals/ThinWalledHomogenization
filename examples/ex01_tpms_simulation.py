@@ -17,8 +17,8 @@ def run_simulation():
     # Nx=Ny=Nz=1 represents a single truncated unit cell cube.
     Nx, Ny, Nz = 1, 1, 1
 
-    res = 2  # Voxel resolution per unit cell (increase for higher accuracy)
-    density = 1  # Target relative density (volume fraction)
+    res = 96  # Voxel resolution per unit cell (increase for higher accuracy)
+    density = 0.15  # Target relative density (volume fraction)
     tpms_type = 'Primitive'  # TPMS topology type
 
     # =====================================================================
