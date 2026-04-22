@@ -2,6 +2,7 @@ import time
 import numpy as np
 
 from utils.tpms_generator import generate_tpms_voxel_grid
+from utils.lattice_generator import generate_lattice_voxel_grid
 from core.plate_homogenizer import homogenization_plate
 
 
