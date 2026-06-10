@@ -1,6 +1,6 @@
 # ThinWalledHomogenization
 
-Open-source Python implementation for the manuscript **"A 99-Line Homogenization Code for Lattice-skin Plate Structures"**.
+Open-source Python implementation for the manuscript **"A 99-Line Homogenization Code for Lattice-skin Plate Structures"** ([arXiv:2604.23181](https://arxiv.org/abs/2604.23181)).
 
 This repository implements a GPU-accelerated **LPS-H** framework, namely homogenization for finite-thickness **Lattice-skin Plate Structures**. It extracts equivalent plate/shell stiffness matrices directly from voxelized TPMS and lattice microstructures while retaining the free-surface effect in the thickness direction.
 
@@ -75,9 +75,11 @@ ThinWalledHomogenization/
 |   +-- ex02_multiple_cells.py               # Thickness size-effect example
 |   +-- ex03_multimaterial_simulation.py     # Bimaterial extension
 |   +-- ex04_tpms_thermal_simulation.py      # Thermal conduction extension
++-- benchmarks/
+|   +-- benchmark_plate_solver.py            # Optional CPU/GPU timing and memory benchmark
 +-- Paper/                                   # Figure notebooks, heatmaps, VTU outputs
 +-- Test/                                    # Experimental scripts and generated files
-+-- requiremens.txt                          # Dependency list
++-- requirements.txt                         # Dependency list
 ```
 
 ## Requirements
@@ -87,7 +89,7 @@ The current implementation uses CuPy and therefore expects an NVIDIA GPU with a 
 Install dependencies with:
 
 ```bash
-pip install -r requiremens.txt
+pip install -r requirements.txt
 ```
 
 The dependency file currently contains:
@@ -150,6 +152,25 @@ ABD = homogenization_plate(
 
 np.set_printoptions(precision=2, suppress=True, linewidth=120)
 print(ABD)
+```
+
+## Optional CPU/GPU Benchmark
+
+The repository includes an optional benchmark script for collecting the CPU/GPU
+timing and memory data used to assess the practical cost of the LPS-H solver.
+The script reuses the same TPMS generator and finite-element assembly routines
+as the main homogenization example.
+
+```bash
+python benchmarks/benchmark_plate_solver.py --resolutions 32 40 48 56 64 --output benchmarks/benchmark_plate_solver_results.csv
+```
+
+The CSV output reports the resolution, active elements, total and active DOFs,
+sparse matrix nonzeros, geometry and assembly time, CPU solve time, GPU solve
+time, GPU memory use, and CPU/GPU speedup. Larger cases can skip CPU solves:
+
+```bash
+python benchmarks/benchmark_plate_solver.py --resolutions 40 50 60 70 80 96 --skip-cpu-above 70
 ```
 
 ## ABD Matrix
@@ -302,7 +323,8 @@ If you use this repository, please cite the associated manuscript:
   title   = {A 99-Line Homogenization Code for Lattice-skin Plate Structures},
   author  = {Ji, Zhongkai and Li, Dawei and Zhao, Yong and Liao, Wenhe},
   year    = {2026},
-  note    = {Manuscript}
+  journal = {arXiv preprint arXiv:2604.23181},
+  url     = {https://arxiv.org/abs/2604.23181}
 }
 ```
 
