@@ -85,19 +85,83 @@ def save_line_plot(
     plt.close(fig)
 
 
+def save_overall_displacement_plot(data: pd.DataFrame, out_base: Path) -> None:
+    x = data["eps11_bc"].to_numpy(dtype=float)
+    max_u = data["max_abs_u_mm"].to_numpy(dtype=float)
+    max_u3 = data["max_abs_u3_mm"].to_numpy(dtype=float)
+
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.plot(x, max_u, "o-", ms=3.6, lw=1.2, color=PALETTE["blue"], label=r"max $|\mathbf{U}|$")
+    ax.plot(x, max_u3, "s-", ms=3.4, lw=1.2, color=PALETTE["red"], label=r"max $|U_3|$")
+    ax.set_xlabel(r"Applied strain $\varepsilon_{11}$")
+    ax.set_ylabel("Displacement (mm)")
+    ax.set_xlim(0.0, max(x) * 1.06)
+    ax.set_ylim(0.0, max(max(max_u), max(max_u3)) * 1.12)
+    ax.legend(frameon=False, loc="upper left", handlelength=1.8, fontsize=9.0)
+    fig.tight_layout()
+    fig.savefig(out_base.with_suffix(".png"))
+    fig.savefig(out_base.with_suffix(".svg"))
+    plt.close(fig)
+
+
+def save_xmax_u3_profile_plot(profile: pd.DataFrame, out_base: Path) -> None:
+    nonzero = profile[profile["eps11_bc"] > 0.0].copy()
+    final_frame = int(nonzero["frame_index"].max())
+    final = nonzero[nonzero["frame_index"] == final_frame].sort_values("y_mm")
+    eps = float(final["eps11_bc"].iloc[0])
+    y0 = 0.5 * (profile["y_mm"].min() + profile["y_mm"].max())
+    y = final["y_mm"].to_numpy(dtype=float) - y0
+    u3 = final["u3_mean_mm"].to_numpy(dtype=float)
+    delta_u3 = float(np.max(u3) - np.min(u3))
+
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.plot(y, u3, "-", lw=1.4, color=PALETTE["blue"])
+    ax.axhline(0.0, color="#999999", lw=0.7, ls="--", zorder=0)
+    ax.set_xlabel(r"Loaded-edge coordinate $y-W/2$ (mm)")
+    ax.set_ylabel(r"Mean loaded-edge $U_3$ (mm)")
+    ax.text(
+        0.04,
+        0.92,
+        rf"$\varepsilon_{{11}}={eps:.3f}$" + "\n" + rf"$\Delta U_3={delta_u3:.3f}$ mm",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9.0,
+    )
+    fig.tight_layout()
+    fig.savefig(out_base.with_suffix(".png"))
+    fig.savefig(out_base.with_suffix(".svg"))
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", required=True, help="CSV produced by extract_diamond_coupling_from_odb.py.")
+    parser.add_argument("--profile-csv", default=None, help="Loaded-end U3(y) profile CSV.")
     parser.add_argument("--outdir", default=None, help="Output figure directory.")
     args = parser.parse_args()
 
     csv_path = Path(args.csv)
+    if args.profile_csv:
+        profile_csv_path = Path(args.profile_csv)
+    else:
+        profile_csv_path = csv_path.with_name(csv_path.stem + "_xmax_u3_profile.csv")
     outdir = Path(args.outdir) if args.outdir else csv_path.parent
     outdir.mkdir(parents=True, exist_ok=True)
 
     data = pd.read_csv(csv_path)
     data = data[data["eps11_bc"] > 0.0].copy()
+    profile = pd.read_csv(profile_csv_path)
     eps = data["eps11_bc"].to_numpy(dtype=float)
+
+    save_overall_displacement_plot(
+        data,
+        outdir / "diamond_odb_overall_displacement_vs_eps11",
+    )
+    save_xmax_u3_profile_plot(
+        profile,
+        outdir / "diamond_odb_xmax_u3_profile_vs_y",
+    )
 
     save_line_plot(
         eps,

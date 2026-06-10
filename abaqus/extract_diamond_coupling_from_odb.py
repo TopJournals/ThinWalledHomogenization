@@ -64,6 +64,7 @@ def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--odb", required=True, help="Path to the Abaqus ODB file.")
     parser.add_argument("--output", required=True, help="Output CSV path.")
+    parser.add_argument("--profile-output", default=None, help="Output CSV path for loaded-end U3(y) profiles.")
     parser.add_argument("--instance", default="DIAMOND_LPS-1", help="ODB instance name.")
     parser.add_argument("--step", default="EPS11_TENSION", help="ODB step name.")
     parser.add_argument("--xmax-set", default="XMAX", help="Loaded-end node set name.")
@@ -114,8 +115,18 @@ def main():
         if out_dir and not os.path.exists(out_dir):
             os.makedirs(out_dir)
 
-        with open(args.output, "w") as csv_file:
+        profile_output = args.profile_output
+        if profile_output is None:
+            root, _ext = os.path.splitext(args.output)
+            profile_output = root + "_xmax_u3_profile.csv"
+
+        profile_dir = os.path.dirname(os.path.abspath(profile_output))
+        if profile_dir and not os.path.exists(profile_dir):
+            os.makedirs(profile_dir)
+
+        with open(args.output, "w") as csv_file, open(profile_output, "w") as profile_file:
             writer = csv.writer(csv_file)
+            profile_writer = csv.writer(profile_file)
             writer.writerow([
                 "frame_index",
                 "step_time",
@@ -129,8 +140,19 @@ def main():
                 "wxy_fit_1_per_mm",
                 "kappa_xy_2wxy_1_per_mm",
                 "mean_u3_mm",
+                "max_abs_u_mm",
                 "max_abs_u3_mm",
                 "reaction_x_N",
+            ])
+            profile_writer.writerow([
+                "frame_index",
+                "step_time",
+                "eps11_bc",
+                "y_mm",
+                "u3_mean_mm",
+                "u3_min_mm",
+                "u3_max_mm",
+                "n_nodes",
             ])
 
             for frame_index, frame in enumerate(step.frames):
@@ -146,6 +168,7 @@ def main():
                 u2_values = []
                 quad_rows = []
                 u3_values = []
+                max_abs_u = 0.0
                 max_abs_u3 = 0.0
                 sum_u3 = 0.0
 
@@ -154,6 +177,7 @@ def main():
                         continue
                     x, y, _z = coords_by_label[label]
                     u1, u2, u3 = disp_by_label[label]
+                    max_abs_u = max(max_abs_u, math.sqrt(u1 * u1 + u2 * u2 + u3 * u3))
                     xc = x - xmid
                     yc = y - ymid
                     affine_rows.append([1.0, xc, yc])
@@ -200,6 +224,27 @@ def main():
                 theta_x = numerator / denominator if denominator > 0.0 else 0.0
                 eps11_bc = mean_u1_xmax / length_x
 
+                profile_groups = {}
+                for label in xface_labels:
+                    if label not in disp_by_label:
+                        continue
+                    _x, y, _z = coords_by_label[label]
+                    u3 = disp_by_label[label][2]
+                    y_key = round(y, 8)
+                    profile_groups.setdefault(y_key, []).append(u3)
+                for y_key in sorted(profile_groups):
+                    values = profile_groups[y_key]
+                    profile_writer.writerow([
+                        frame_index,
+                        frame.frameValue,
+                        eps11_bc,
+                        y_key,
+                        sum(values) / len(values),
+                        min(values),
+                        max(values),
+                        len(values),
+                    ])
+
                 reaction_x = 0.0
                 if "RF" in frame.fieldOutputs:
                     try:
@@ -225,6 +270,7 @@ def main():
                     wxy,
                     2.0 * wxy,
                     mean_u3,
+                    max_abs_u,
                     max_abs_u3,
                     reaction_x,
                 ])
