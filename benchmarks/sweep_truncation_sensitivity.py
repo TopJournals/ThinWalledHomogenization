@@ -7,7 +7,8 @@ The script reuses the repository geometry generators and the core
 2. relative density versus thickness-wise unit-cell count,
 3. skin thickness versus thickness-wise unit-cell count,
 
-with normalized ``A11`` and ``D11`` shown separately for each parameter group.
+with LVS-H-referenced errors in ``A11`` and ``D11`` shown separately for each
+parameter group.
 Results are cached in a CSV file so interrupted sweeps can be resumed without
 recomputing completed cases.
 
@@ -29,12 +30,20 @@ from typing import Iterable
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+import cupy as cp
+import cupyx.scipy.sparse as cpsp
+import cupyx.scipy.sparse.linalg as cpspla
+from scipy.sparse import coo_matrix
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.plate_homogenizer import homogenization_plate  # noqa: E402
+from core.plate_homogenizer import (  # noqa: E402
+    compute_element_stiffness,
+    get_isotropic_elasticity,
+    homogenization_plate,
+)
 from utils.lattice_generator import generate_lattice_voxel_grid  # noqa: E402
 from utils.tpms_generator import generate_tpms_voxel_grid  # noqa: E402
 
@@ -128,6 +137,24 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT / "Paper" / "fig_truncation_sensitivity",
         help="Output figure prefix. Six PNG and six SVG files are generated.",
+    )
+    parser.add_argument(
+        "--reference-csv",
+        type=Path,
+        default=PROJECT_ROOT / "Paper" / "truncation_sensitivity_lvs_references.csv",
+        help="Cached three-dimensional periodic LVS-H reference stiffnesses.",
+    )
+    parser.add_argument(
+        "--summary-csv",
+        type=Path,
+        default=PROJECT_ROOT / "Paper" / "truncation_sensitivity_lvs_summary.csv",
+        help="Summary of absolute stiffnesses, errors, and achieved voxel fractions.",
+    )
+    parser.add_argument(
+        "--combined-output",
+        type=Path,
+        default=PROJECT_ROOT / "Paper" / "fig_analysis_lvs_error",
+        help="Combined six-panel output path without an extension.",
     )
     parser.add_argument(
         "--plot-only",
@@ -274,6 +301,152 @@ def add_solid_skins(voxel: np.ndarray, requested_skin_ratio: float) -> tuple[np.
     return padded, pad_layers, actual_ratio
 
 
+def build_volume_edof(voxel: np.ndarray) -> tuple[np.ndarray, int]:
+    """Map all three pairs of opposite faces to enforce 3D periodicity."""
+
+    nx, ny, nz = voxel.shape
+    nodes = np.arange(nx * ny * nz).reshape(nx, ny, nz)
+    ix = np.arange(nx + 1) % nx
+    iy = np.arange(ny + 1) % ny
+    iz = np.arange(nz + 1) % nz
+    periodic_nodes = nodes[np.ix_(ix, iy, iz)]
+    dofs = np.stack((3 * periodic_nodes, 3 * periodic_nodes + 1, 3 * periodic_nodes + 2), axis=-1)
+    n1, n2 = dofs[:-1, :-1, :-1], dofs[1:, :-1, :-1]
+    n3, n4 = dofs[1:, 1:, :-1], dofs[:-1, 1:, :-1]
+    n5, n6 = dofs[:-1, :-1, 1:], dofs[1:, :-1, 1:]
+    n7, n8 = dofs[1:, 1:, 1:], dofs[:-1, 1:, 1:]
+    edof = np.concatenate((n1, n2, n3, n4, n5, n6, n7, n8), axis=-1)
+    return edof[voxel > 0], 3 * nx * ny * nz
+
+
+def homogenization_volume(voxel: np.ndarray, E: float, nu: float) -> np.ndarray:
+    """Compute the 3D periodic effective tensor used as the LVS-H reference."""
+
+    nx, ny, nz = voxel.shape
+    C = get_isotropic_elasticity(E, nu)
+    Ke, Bs, detJ = compute_element_stiffness(C, 1.0 / nx, 1.0 / ny, 1.0 / nz)
+    edof, total_dofs = build_volume_edof(voxel)
+    iK = np.repeat(edof, 24, axis=1).ravel()
+    jK = np.tile(edof, (1, 24)).ravel()
+    K = coo_matrix(
+        (np.tile(Ke.ravel(), len(edof)), (iK, jK)),
+        shape=(total_dofs, total_dofs),
+    ).tocsr()
+
+    macro = np.broadcast_to(np.eye(6), (len(edof), 6, 6)).copy()
+    F_ele = sum(
+        np.einsum("ji,kjl->kil", B, np.einsum("ij,kjl->kil", C, macro)) * detJ
+        for B in Bs
+    )
+    F = np.column_stack(
+        [
+            np.bincount(edof.ravel(), weights=F_ele[:, :, c].ravel(), minlength=total_dofs)
+            for c in range(6)
+        ]
+    )
+    active = np.setdiff1d(np.unique(edof), np.unique(edof)[:3])
+    K_gpu = cpsp.csr_matrix(K[active][:, active])
+    F_gpu = cp.asarray(F[active])
+    M_gpu = cpsp.diags(1.0 / K_gpu.diagonal())
+    U_gpu = cp.zeros((len(active), 6))
+    for c in range(6):
+        U_gpu[:, c], info = cpspla.cg(K_gpu, F_gpu[:, c], M=M_gpu, tol=1e-6, maxiter=5000)
+        if info != 0:
+            raise RuntimeError(f"LVS-H load case {c} did not converge: info={info}")
+    U = np.zeros((total_dofs, 6))
+    U[active] = U_gpu.get()
+
+    CH = np.zeros((6, 6))
+    for B in Bs:
+        stress = np.einsum(
+            "ij,kjl->kil",
+            C,
+            macro - np.einsum("ij,kjl->kil", B, U[edof]),
+        )
+        CH += stress.sum(axis=0) * detJ
+    return (CH + CH.T) / 2.0
+
+
+def plane_stress_reduction(CH: np.ndarray) -> np.ndarray:
+    in_plane = [0, 1, 5]
+    out_plane = [2, 3, 4]
+    return CH[np.ix_(in_plane, in_plane)] - CH[np.ix_(in_plane, out_plane)] @ np.linalg.solve(
+        CH[np.ix_(out_plane, out_plane)],
+        CH[np.ix_(out_plane, in_plane)],
+    )
+
+
+def validate_volume_homogenizer(E: float, nu: float) -> None:
+    Q = plane_stress_reduction(homogenization_volume(np.ones((4, 4, 4), dtype=np.int8), E, nu))
+    expected = E / (1.0 - nu**2)
+    if not np.isclose(Q[0, 0], expected, rtol=1e-10, atol=1e-8):
+        raise RuntimeError("The LVS-H implementation failed the homogeneous isotropic self-check.")
+
+
+def load_lvs_references(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def write_lvs_references(path: Path, rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["topology", "relative_density", "resolution", "active_fraction", "Q11"],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def lvs_key(topology: str, relative_density: float, resolution: int) -> tuple[str, str, str]:
+    return topology, f"{relative_density:.8g}", str(resolution)
+
+
+def ensure_lvs_references(
+    records: list[dict[str, object]],
+    args: argparse.Namespace,
+) -> dict[tuple[str, str, str], dict[str, float]]:
+    rows = load_lvs_references(args.reference_csv)
+    done = {
+        lvs_key(row["topology"], float(row["relative_density"]), int(row["resolution"]))
+        for row in rows
+    }
+    requested = sorted(
+        {
+            (str(record["topology"]), float(record["relative_density"]), int(record["resolution"]))
+            for record in records
+        }
+    )
+    for topology, density, resolution in requested:
+        key = lvs_key(topology, density, resolution)
+        if key in done:
+            continue
+        case = SweepCase("reference", topology, topology, density, 0.0, 1)
+        voxel = generate_core_voxel(case, resolution)
+        Q = plane_stress_reduction(homogenization_volume(voxel, args.youngs_modulus, args.poisson))
+        rows.append(
+            {
+                "topology": topology,
+                "relative_density": f"{density:.8g}",
+                "resolution": str(resolution),
+                "active_fraction": f"{float(voxel.mean()):.8g}",
+                "Q11": f"{float(Q[0, 0]):.12g}",
+            }
+        )
+        write_lvs_references(args.reference_csv, rows)
+        print(f"LVS-H reference {topology}, rho={density:.3f}: Q11={Q[0, 0]:.6g}")
+    return {
+        lvs_key(row["topology"], float(row["relative_density"]), int(row["resolution"])): {
+            "active_fraction": float(row["active_fraction"]),
+            "Q11": float(row["Q11"]),
+        }
+        for row in load_lvs_references(args.reference_csv)
+    }
+
+
 def run_case(case: SweepCase, args: argparse.Namespace) -> dict[str, str]:
     start = time.perf_counter()
     voxel_core = generate_core_voxel(case, args.resolution)
@@ -350,10 +523,10 @@ def configure_matplotlib() -> None:
             "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
             "svg.fonttype": "none",
             "text.usetex": False,
-            "font.size": 9,
-            "axes.labelsize": 9,
-            "xtick.labelsize": 9,
-            "ytick.labelsize": 9,
+            "font.size": 10.5,
+            "axes.labelsize": 10.5,
+            "xtick.labelsize": 10.5,
+            "ytick.labelsize": 10.5,
             "legend.fontsize": 8,
             "mathtext.fontset": "stix",
             "axes.spines.top": True,
@@ -395,86 +568,168 @@ def rows_to_records(rows: Iterable[dict[str, str]]) -> list[dict[str, object]]:
     return records
 
 
-def normalize_records(records: list[dict[str, object]]) -> None:
+def attach_lvs_references(
+    records: list[dict[str, object]],
+    references: dict[tuple[str, str, str], dict[str, float]],
+    args: argparse.Namespace,
+) -> None:
+    solid_q11 = args.youngs_modulus / (1.0 - args.poisson**2)
+    h = args.thickness
+    for record in records:
+        key = lvs_key(
+            str(record["topology"]),
+            float(record["relative_density"]),
+            int(record["resolution"]),
+        )
+        core_q11 = references[key]["Q11"]
+        skin_ratio = float(record["actual_skin_ratio"])
+        skin_thickness = skin_ratio * h
+        core_thickness = h - 2.0 * skin_thickness
+        a11_lvs = core_q11 * core_thickness + 2.0 * solid_q11 * skin_thickness
+        d11_lvs = (
+            core_q11 * core_thickness**3 / 12.0
+            + 2.0
+            * solid_q11
+            * ((h / 2.0) ** 3 - (core_thickness / 2.0) ** 3)
+            / 3.0
+        )
+        record["lvs_core_active_fraction"] = references[key]["active_fraction"]
+        record["A11_lvs"] = a11_lvs
+        record["D11_lvs"] = d11_lvs
+        record["A11_error_pct"] = 100.0 * (float(record["A11"]) - a11_lvs) / a11_lvs
+        record["D11_error_pct"] = 100.0 * (float(record["D11"]) - d11_lvs) / d11_lvs
+
+
+def write_summary(records: list[dict[str, object]], path: Path) -> None:
     groups: dict[tuple[str, str], list[dict[str, object]]] = {}
     for record in records:
-        key = (str(record["group"]), str(record["label"]))
-        groups.setdefault(key, []).append(record)
+        groups.setdefault((str(record["group"]), str(record["label"])), []).append(record)
+    rows: list[dict[str, str]] = []
+    group_order = {"density": 0, "topology": 1, "skin": 2}
+    for (group, label), values in sorted(groups.items(), key=lambda item: (group_order[item[0][0]], item[0][1])):
+        values.sort(key=lambda item: int(item["nz"]))
+        first, last = values[0], values[-1]
+        rows.append(
+            {
+                "group": group,
+                "label": label,
+                "topology": str(first["topology"]),
+                "target_core_density": f"{float(first['relative_density']):.6f}",
+                "achieved_voxel_fraction_min": f"{min(float(v['active_fraction']) for v in values):.6f}",
+                "achieved_voxel_fraction_max": f"{max(float(v['active_fraction']) for v in values):.6f}",
+                "actual_skin_ratio_min": f"{min(float(v['actual_skin_ratio']) for v in values):.6f}",
+                "actual_skin_ratio_max": f"{max(float(v['actual_skin_ratio']) for v in values):.6f}",
+                "A11_Nz1": f"{float(first['A11']):.9g}",
+                "A11_LVS_Nz1": f"{float(first['A11_lvs']):.9g}",
+                "A11_error_Nz1_pct": f"{float(first['A11_error_pct']):.6f}",
+                "D11_Nz1": f"{float(first['D11']):.9g}",
+                "D11_LVS_Nz1": f"{float(first['D11_lvs']):.9g}",
+                "D11_error_Nz1_pct": f"{float(first['D11_error_pct']):.6f}",
+                "last_nz": str(int(last["nz"])),
+                "A11_error_last_pct": f"{float(last['A11_error_pct']):.6f}",
+                "D11_error_last_pct": f"{float(last['D11_error_pct']):.6f}",
+            }
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
 
-    for group_records in groups.values():
-        reference = max(group_records, key=lambda item: int(item["nz"]))
-        ref_a11 = float(reference["A11"])
-        ref_d11 = float(reference["D11"])
-        for record in group_records:
-            record["A11_norm"] = float(record["A11"]) / ref_a11 if ref_a11 else np.nan
-            record["D11_norm"] = float(record["D11"]) / ref_d11 if ref_d11 else np.nan
+
+PANEL_INFO = [
+    ("density", "$A_{11}$", "A11_error_pct", "Relative density", "density_A11"),
+    ("density", "$D_{11}$", "D11_error_pct", "Relative density", "density_D11"),
+    ("topology", "$A_{11}$", "A11_error_pct", "Lattice topology", "topology_A11"),
+    ("topology", "$D_{11}$", "D11_error_pct", "Lattice topology", "topology_D11"),
+    ("skin", "$A_{11}$", "A11_error_pct", "Skin thickness", "skin_A11"),
+    ("skin", "$D_{11}$", "D11_error_pct", "Skin thickness", "skin_D11"),
+]
+COLORS = ["#3A5BA0", "#2A9D8F", "#E76F51", "#F2B84B", "#7E6BC4", "#6C757D"]
+MARKERS = ["o", "s", "^", "D", "v", "P"]
 
 
-def plot_sensitivity(records: list[dict[str, object]], output_prefix: Path) -> None:
+def draw_panel(
+    ax: plt.Axes,
+    records: list[dict[str, object]],
+    group: str,
+    stiffness: str,
+    value_key: str,
+    title: str,
+) -> None:
+    subset = [record for record in records if record["group"] == group]
+    labels = list(dict.fromkeys(str(record["label"]) for record in subset))
+    all_x: list[int] = []
+    for idx, label in enumerate(labels):
+        line = sorted((r for r in subset if r["label"] == label), key=lambda r: int(r["nz"]))
+        x = [int(r["nz"]) for r in line]
+        y = [float(r[value_key]) for r in line]
+        all_x.extend(x)
+        ax.plot(
+            x,
+            y,
+            color=COLORS[idx % len(COLORS)],
+            marker=MARKERS[idx % len(MARKERS)],
+            linewidth=1.2,
+            markersize=4.0,
+            label=label,
+        )
+    ax.axhline(0.0, color="#6E6E6E", linestyle="--", linewidth=1.0, zorder=1)
+    ax.set_title(title, fontsize=10.5, pad=6)
+    ax.set_xlabel("Cell count in thickness ($N_z$)")
+    ax.set_ylabel(f"Relative error in {stiffness} (\%)")
+    ax.set_xticks(sorted(set(all_x)))
+    ax.set_xlim(min(all_x) - 0.5, max(all_x) + 0.5)
+    ax.grid(False)
+    ax.legend(
+        frameon=False,
+        fontsize=7.5,
+        ncol=2,
+        loc="best",
+        handlelength=1.6,
+        handletextpad=0.4,
+        columnspacing=0.8,
+    )
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(0.8)
+    ax.tick_params(axis="both", which="both", direction="in", top=True, right=True)
+
+
+def plot_sensitivity(
+    records: list[dict[str, object]],
+    output_prefix: Path,
+    combined_output: Path,
+) -> None:
     configure_matplotlib()
-    normalize_records(records)
-
-    panel_info = [
-        ("topology", "$A_{11}$", "A11_norm", "Lattice topology", "topology_A11"),
-        ("topology", "$D_{11}$", "D11_norm", "Lattice topology", "topology_D11"),
-        ("density", "$A_{11}$", "A11_norm", "Relative density", "density_A11"),
-        ("density", "$D_{11}$", "D11_norm", "Relative density", "density_D11"),
-        ("skin", "$A_{11}$", "A11_norm", "Skin thickness", "skin_A11"),
-        ("skin", "$D_{11}$", "D11_norm", "Skin thickness", "skin_D11"),
-    ]
-
-    colors = [
-        "#4A6B8A",  # deep blue gray
-        "#C27471",  # brick red
-        "#E2B879",  # muted mustard
-        "#6A8074",  # muted green
-        "#7D6E83",  # muted violet
-        "#8A7A5C",  # muted olive brown
-    ]
-    markers = ["o", "s", "^", "d", "v", "P"]
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
-    all_nz = sorted({int(r["nz"]) for r in records})
+    combined_output.parent.mkdir(parents=True, exist_ok=True)
 
-    for group, ylabel, value_key, title, suffix in panel_info:
+    for group, stiffness, value_key, title, suffix in PANEL_INFO:
         fig, ax = plt.subplots(figsize=(8.0 / 2.54, 6.0 / 2.54))
-        plt.subplots_adjust(left=0.18, right=0.97, bottom=0.20, top=0.86)
-
-        subset = [r for r in records if r["group"] == group]
-        labels = list(dict.fromkeys(str(r["label"]) for r in subset))
-        panel_values: list[float] = []
-        for idx, label in enumerate(labels):
-            line = sorted((r for r in subset if r["label"] == label), key=lambda r: int(r["nz"]))
-            x = [int(r["nz"]) for r in line]
-            y = [float(r[value_key]) for r in line]
-            panel_values.extend(y)
-            ax.plot(
-                x,
-                y,
-                color=colors[idx % len(colors)],
-                marker=markers[idx % len(markers)],
-                linewidth=1.0,
-                markersize=3.0,
-                label=label,
-            )
-        ax.axhline(1.0, color="gray", linestyle="--", linewidth=1.2, zorder=1)
-        ax.set_title(title, fontsize=10, pad=6)
-        ax.set_ylabel(f"Normalized {ylabel}")
-        finite_values = [value for value in panel_values if np.isfinite(value)]
-        if finite_values:
-            ymin = min(0.0, min(finite_values) * 1.05)
-            ymax = max(1.08, max(finite_values) * 1.08)
-            ax.set_ylim(ymin, ymax)
-        else:
-            ax.set_ylim(0.0, 1.08)
-        ax.grid(False)
-        ax.legend(frameon=False, fontsize=8, ncol=2, handlelength=1.8, columnspacing=0.9)
-        ax.set_xlabel("Cell count in thickness ($N_z$)")
-        ax.set_xticks(all_nz)
-        output_png = output_prefix.with_name(f"{output_prefix.name}_{suffix}").with_suffix(".png")
-        output_svg = output_prefix.with_name(f"{output_prefix.name}_{suffix}").with_suffix(".svg")
-        fig.savefig(output_png)
-        fig.savefig(output_svg)
+        draw_panel(ax, records, group, stiffness, value_key, title)
+        fig.tight_layout()
+        base = output_prefix.with_name(f"{output_prefix.name}_{suffix}")
+        fig.savefig(base.with_suffix(".png"), dpi=600)
+        fig.savefig(base.with_suffix(".svg"))
         plt.close(fig)
+
+    fig, axes = plt.subplots(3, 2, figsize=(16.8 / 2.54, 18.0 / 2.54), constrained_layout=True)
+    for panel_index, (ax, info) in enumerate(zip(axes.ravel(), PANEL_INFO)):
+        draw_panel(ax, records, *info[:4])
+        ax.text(
+            -0.17,
+            1.08,
+            f"({chr(97 + panel_index)})",
+            transform=ax.transAxes,
+            fontsize=10.5,
+            fontweight="bold",
+            va="top",
+        )
+    fig.savefig(combined_output.with_suffix(".png"), dpi=600)
+    fig.savefig(combined_output.with_suffix(".svg"))
+    fig.savefig(combined_output.with_suffix(".jpg"), dpi=600)
+    plt.close(fig)
 
 
 def main() -> None:
@@ -506,8 +761,14 @@ def main() -> None:
     records = rows_to_records(load_existing_rows(args.output_csv))
     if not records:
         raise RuntimeError(f"No records available in {args.output_csv}.")
-    plot_sensitivity(records, args.output_prefix)
-    print(f"Saved six PNG/SVG figures with prefix {args.output_prefix}")
+    validate_volume_homogenizer(args.youngs_modulus, args.poisson)
+    references = ensure_lvs_references(records, args)
+    attach_lvs_references(records, references, args)
+    write_summary(records, args.summary_csv)
+    plot_sensitivity(records, args.output_prefix, args.combined_output)
+    print(f"Saved six LVS-H-referenced PNG/SVG panels with prefix {args.output_prefix}")
+    print(f"Saved combined figure to {args.combined_output.with_suffix('.jpg')}")
+    print(f"Saved absolute-value and achieved-density summary to {args.summary_csv}")
 
 
 if __name__ == "__main__":

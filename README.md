@@ -77,14 +77,17 @@ ThinWalledHomogenization/
 |   +-- ex04_tpms_thermal_simulation.py      # Thermal conduction extension
 +-- benchmarks/
 |   +-- benchmark_plate_solver.py            # Optional CPU/GPU timing and memory benchmark
-+-- Paper/                                   # Figure notebooks, heatmaps, VTU outputs
-+-- Test/                                    # Experimental scripts and generated files
-+-- requirements.txt                         # Dependency list
++-- abaqus/                                  # Detailed-model generation and ODB post-processing
++-- Paper/                                   # Figure notebooks, inputs, and processed outputs
++-- scripts/
+|   +-- check_appendix_sync.py               # Appendix/core exact-match check
++-- REPRODUCIBILITY.md                       # Versioned artifact and environment manifest
++-- requirements.txt                         # Fixed Python dependency versions
 ```
 
 ## Requirements
 
-The current implementation uses CuPy and therefore expects an NVIDIA GPU with a CUDA runtime compatible with `cupy-cuda12x`.
+The current implementation uses CuPy and therefore expects an NVIDIA GPU with a CUDA runtime compatible with `cupy-cuda12x`. The dependency versions used for the revised manuscript are fixed in `requirements.txt`; the tested hardware, CUDA configuration, manuscript-artifact mapping, and reproduction commands are recorded in [REPRODUCIBILITY.md](REPRODUCIBILITY.md).
 
 Install dependencies with:
 
@@ -92,16 +95,30 @@ Install dependencies with:
 pip install -r requirements.txt
 ```
 
-The dependency file currently contains:
+The dependency file contains the tested runtime and figure-generation packages:
 
 ```text
-cupy-cuda12x
-scipy
+numpy==1.26.4
+scipy==1.14.1
+cupy-cuda12x==13.3.0
+matplotlib==3.9.2
+pandas==2.2.3
+seaborn==0.13.2
+pyvista==0.47.1
+jupyterlab==4.2.5
 ```
 
-`numpy` is also used throughout the project and is normally installed as a dependency of SciPy/CuPy.
-
 If only a CPU environment is available, the GPU solver section in `core/plate_homogenizer.py` can be replaced by `scipy.sparse.linalg.cg`, as described in the manuscript. The repository version is currently GPU-oriented.
+
+## Archived manuscript version
+
+The fixed source snapshot used for the manuscript is archived as [`v1.0.0`](https://github.com/TopJournals/ThinWalledHomogenization/releases/tag/v1.0.0). The linked DOI-backed record contains the raw data that are unsuitable for Git. Release identifiers and the artifact manifest are recorded in `REPRODUCIBILITY.md`; the moving `main` branch should not be cited as the archival version.
+
+Appendix A is checked against the archived core solver with:
+
+```bash
+python scripts/check_appendix_sync.py --manuscript ../R2603_paper/11_Manuscript.tex
+```
 
 ## Quick Start
 

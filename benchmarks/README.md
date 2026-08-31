@@ -34,3 +34,20 @@ python benchmarks/benchmark_plate_solver.py ^
 
 The benchmark intentionally does not run as part of the normal examples because
 high-resolution cases can be expensive.
+
+## Repeated end-to-end benchmark
+
+`benchmark_end_to_end.py` leaves the core solver unchanged and records both
+solver-only and complete workflow costs. The default protocol uses one
+unrecorded warm-up and five recorded runs at `N = 20, 35, 50, 65`, with one CPU
+thread and Jacobi-preconditioned CG on both backends:
+
+```bash
+python benchmarks/benchmark_end_to_end.py
+```
+
+The `benchmarks/r2_m5/` output contains per-run timings, mean and standard
+deviation summaries, and environment metadata. End-to-end timing includes
+geometry generation, assembly, backend setup and transfer, initialization,
+solution and synchronization, return transfer, stress recovery, and ABD
+extraction.

@@ -1,4 +1,26 @@
-.idea
-__pycache__
-Paper
-Test
+.idea/
+.ipynb_checkpoints/
+**/__pycache__/
+*.py[cod]
+Test/
+
+# Generated figure and visualization files. Source notebooks, scripts, and
+# numerical CSV/JSON data under Paper/ remain archivable.
+Paper/**/*.png
+Paper/**/*.jpg
+Paper/**/*.jpeg
+Paper/**/*.svg
+Paper/**/*.vtu
+
+# Large Abaqus databases and transient solver files. The reproducibility
+# archive retains the input decks, metadata, and processed CSV outputs.
+*.odb
+*.stt
+*.mdl
+*.sim
+*.prt
+*.com
+*.dat
+*.msg
+*.sta
+*.023

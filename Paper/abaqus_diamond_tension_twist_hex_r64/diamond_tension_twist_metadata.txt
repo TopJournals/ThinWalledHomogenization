@@ -1,0 +1,9 @@
+resolution_per_cell = 64
+cells = 3, 3, 1
+relative_density_target = 0.15
+relative_density_actual = 0.1500117
+nodes = 586752
+hex_elements = 353922
+element_type = C3D8
+eps11 = 0.01
+cell_size_mm = 10.0

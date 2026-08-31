@@ -1,0 +1,8 @@
+resolution_per_cell = 24
+cells = 3, 3, 1
+relative_density_target = 0.15
+relative_density_actual = 0.15043081
+nodes = 50418
+tetra_elements = 112296
+eps11 = 0.01
+cell_size_mm = 10.0

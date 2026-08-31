@@ -1,2 +1,8 @@
-cupy-cuda12x
-scipy
+numpy==1.26.4
+scipy==1.14.1
+cupy-cuda12x==13.3.0
+matplotlib==3.9.2
+pandas==2.2.3
+seaborn==0.13.2
+pyvista==0.47.1
+jupyterlab==4.2.5

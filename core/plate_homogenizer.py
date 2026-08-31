@@ -59,7 +59,7 @@ def homogenization_plate(voxel, E=2000.0, nu=0.3, thickness=10.0, Nx=1, Ny=1, Nz
     Ly = Ny * cell_size
     Lz = thickness
     dx, dy, dz = Lx / nx, Ly / ny, Lz / nz
-    plate_area = Lx * Ly  # Critical normalization factor for 2D-PH
+    plate_area = Lx * Ly  # Normalization factor for LPS-H
 
     C = get_isotropic_elasticity(E, nu)
     Ke, Bs, detJ = compute_element_stiffness(C, dx, dy, dz)
